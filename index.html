@@ -1,0 +1,308 @@
+﻿<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>L’ADORÉE — Calculateur Food Cost</title>
+<style>
+:root{--cr:#f6efe3;--of:#fffaf2;--ch:#3b2417;--ca:#b9803f;--ln:#e4d6c0;--wa:#a4452c;--mu:#7a6552}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cr);color:var(--ch);font:15px/1.5 Georgia,'Times New Roman',serif}
+header{text-align:center;padding:22px 12px 10px}
+h1{margin:0;font-size:clamp(19px,4vw,30px);letter-spacing:.1em;font-weight:600}
+h1+p{margin:4px 0 0;color:var(--ca);letter-spacing:.28em;font-size:12px}
+nav{display:flex;gap:6px;overflow-x:auto;padding:8px 12px;border-bottom:1px solid var(--ln);position:sticky;top:0;background:var(--cr);z-index:5}
+nav button{white-space:nowrap}
+main{max-width:1100px;margin:auto;padding:14px}
+.card{background:var(--of);border:1px solid var(--ln);border-radius:10px;padding:14px;margin-bottom:14px}
+h2{font-size:18px;margin:0 0 10px}
+button,select,input{font:inherit;color:inherit}
+button{background:var(--of);border:1px solid var(--ch);border-radius:18px;padding:6px 14px;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ca);outline-offset:2px}
+button.on{background:var(--ch);color:var(--of)}
+button.x{border-color:var(--wa);color:var(--wa);padding:1px 9px}
+input,select{border:1px solid var(--ln);border-radius:6px;padding:5px 7px;background:#fff;max-width:100%}
+input[type=number]{width:96px;text-align:right}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th,td{padding:6px 8px;border-bottom:1px solid var(--ln);text-align:left;white-space:nowrap}
+th{font-size:13px;color:var(--ca);font-weight:600}
+.r{text-align:right}
+.max{background:#f5d9d0}.min{background:#dfe9d3}
+.warn{background:#f8e3dc;border-left:4px solid var(--wa);padding:8px 12px;margin:8px 0;border-radius:6px}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.kpi b{display:block;font-size:21px}.kpi span{font-size:13px;color:var(--mu)}
+.bar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--ln)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+small{color:var(--mu)}
+@media print{nav,.np,header p{display:none}body{background:#fff}.card{border:0}}
+</style>
+</head>
+<body>
+<header><h1>L’ADORÉE — THE NEW YORK ROLL CLUB</h1><p>CALCULATEUR FOOD COST</p></header>
+<nav id="nav" class="np"></nav>
+<main id="main"></main>
+<input type="file" id="file" accept=".json,application/json" hidden>
+
+<script>
+/* ============ DONNÉES INITIALES (hypothèses de travail, entièrement modifiables) ============ */
+const KEY='adoree_food_cost_v1';
+const TABS=[['dash','Tableau de bord'],['rec','Recettes'],['pate','Pâtes'],['mp','Matières premières'],['cmp','Comparatif et marge'],['prod','Production'],['save','Sauvegarde']];
+const UN={kg:['g',1000],L:['ml',1000],'pièce':['pièce',1]};            // unité d'achat → [unité de recette, facteur]
+const SEC=[['pate','Pâte (ajout)'],['garniture','Garniture'],['glacage','Glaçage / nappage'],['finition','Finition']];
+const MP0=[['Farine','kg',2.2],['Beurre','kg',28],['Lait','L',1.7],['Sucre','kg',3.5],['Levure boulangère','kg',12],['Sel','kg',.8],['Œuf','pièce',.55],['Cacao poudre','kg',35],['Pâte de pistache','kg',65],['Pistaches concassées','kg',75],['Chocolat blanc','kg',35],['Chocolat noir','kg',32],['Chocolat au lait','kg',30],['Pâte de noisette','kg',45],['Noisettes','kg',55],['Café moulu ou extrait','kg',35],['Crème liquide','L',8.5],['Caramel','kg',18],['Amandes','kg',38],['Vanille','kg',80],['Pommes','kg',4],['Cannelle','kg',35],['Noix','kg',45]];
+const today=()=>new Date().toISOString().slice(0,10);
+const mid=n=>'m'+MP0.findIndex(x=>x[0]===n);
+const I=(n,q,s)=>({m:mid(n),q,s});
+const R=(ref,name,dough,items,cat='Rolls')=>({ref,name,dough,items,cat,ttc:'',tva:'',qty:0,pack:'',loss:'',dg:'',np:''});  // dg = g de pâte par pièce ; np = pièces tirées du lot
+const D=(name,items,x)=>Object.assign({name,items,tour:[],yield:'',chutes:'',recup:''},x);   // pâte par LOT  // pack/loss vides = valeurs globales
+const mats0=()=>MP0.map((x,i)=>({id:'m'+i,name:x[0],unit:x[1],price:x[2],date:today(),sup:''}));
+function init(){const s={
+ mats:mats0(),
+ // Cocoa et Signature : composition volontairement vide, à compléter par l'utilisateur
+ // Classic Butter : proportions provisoires converties en lot de 200 pièces (poids obtenu estimé, hors œufs)
+ doughs:{classic:D('Classic Butter',[I('Farine',11000),I('Beurre',5000),I('Lait',2400),I('Sucre',1000),I('Levure boulangère',240),I('Sel',160),I('Œuf',16)],{yield:19.8,prov:true}),
+         cocoa:D('Cocoa',[]),signature:D('Signature',[])},
+ recipes:[
+  R('NY01','SOHO CRUNCH','classic',[I('Pâte de pistache',15,'garniture'),I('Chocolat blanc',8,'garniture'),I('Chocolat blanc',10,'glacage'),I('Pistaches concassées',7,'finition')]),
+  R('NY02','MIDNIGHT','cocoa',[I('Cacao poudre',5,'pate'),I('Chocolat noir',23,'garniture'),I('Chocolat noir',15,'glacage'),I('Chocolat noir',7,'finition')]),
+  R('NY03','DOUBLE TROUBLE','classic',[I('Chocolat au lait',12,'garniture'),I('Pâte de noisette',11,'garniture'),I('Chocolat au lait',15,'glacage'),I('Noisettes',7,'finition')]),
+  R('NY04','AFTER HOURS','classic',[I('Crème liquide',15,'garniture'),I('Café moulu ou extrait',3,'garniture'),I('Caramel',15,'glacage'),I('Amandes',7,'finition')]),
+  R('NY05','THE PENTHOUSE','signature',[I('Vanille',.5,'garniture'),I('Crème liquide',15,'garniture'),I('Chocolat blanc',15,'glacage'),I('Amandes',7,'finition')]),
+  R('NY06','BIG APPLE','classic',[I('Pommes',18,'garniture'),I('Sucre',3,'garniture'),I('Cannelle',.5,'garniture'),I('Caramel',15,'glacage'),I('Noix',7,'finition')]),
+  R('MINI01','MINI NEW YORK ROLL','',[],'Mini rolls')],   // fiche technique à définir
+ params:{loss:5,pack:.5,qty:1,days:26,ht:false},targets:{'Rolls':150,'Mini rolls':60},v:4};
+ s.recipes.forEach(r=>{if(r.dough==='classic')r.dg=99});return s;}
+
+/* ============ ÉTAT, SAUVEGARDE, CHARGEMENT ============ */
+let S=init(),UI={tab:'dash',rec:0},storeOK=true;
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){storeOK=false}}
+function valid(o){return o&&Array.isArray(o.mats)&&Array.isArray(o.recipes)&&o.doughs&&typeof o.doughs==='object'}
+function migrate(o){const d=init();o.params=Object.assign(d.params,o.params||{});
+ if(!o.targets)o.targets={'Rolls':o.params.daily!==undefined?o.params.daily:150,'Mini rolls':o.params.mini!==undefined?o.params.mini:60};
+ o.recipes.forEach(r=>{if(r.cat===undefined)r.cat='Rolls';if(r.pack===undefined)r.pack='';if(r.loss===undefined)r.loss=''});
+ if(!o.v&&!o.recipes.some(r=>r.ref==='MINI01'))o.recipes.push(d.recipes.find(r=>r.ref==='MINI01'));
+ if((o.v||0)<3){const W=l=>l.reduce((t,x)=>{const a=o.mats.find(y=>y.id===x.m);return t+(a&&a.unit!=='pièce'?(+x.q||0):0)},0);
+  Object.keys(o.doughs).forEach(k=>{const d=o.doughs[k];if(d.yield!==undefined)return;const w=Math.round(W(d.items)*1e4)/1e4;
+   Object.assign(d,{base:'',yield:'',chutes:'',recup:''});
+   if(d.items.length&&w>0){d.items.forEach(x=>x.q=Math.round((+x.q||0)*200*1e4)/1e4);d.yield=Math.round(w*200)/1000;d.prov=true;
+    o.recipes.forEach(r=>{if(r.dough===k&&r.dg===undefined)r.dg=w})}});}
+ o.recipes.forEach(r=>{if(r.dg===undefined)r.dg='';if(r.np===undefined)r.np=''});
+ if((o.v||0)<4)Object.keys(o.doughs).forEach(k=>{const d=o.doughs[k],b=d.base&&o.doughs[d.base];   // ancienne pâte feuilletée (détrempe + ajouts) → fiche unique avec tourage
+  if(b){d.tour=d.items;d.items=JSON.parse(JSON.stringify(b.items));d.yield=b.yield}
+  delete d.base;if(!Array.isArray(d.tour))d.tour=[]});
+ o.v=4;return o}
+function load(){try{const o=JSON.parse(localStorage.getItem(KEY));if(valid(o))S=migrate(o)}catch(e){}}
+
+/* ============ CALCULS ============ */
+const m=i=>S.mats.find(x=>x.id===i);
+const ic=x=>{const a=m(x.m);return a?(+a.price||0)*(+x.q||0)/UN[a.unit][1]:0};   // prix × quantité / unité d'achat
+const sum=l=>l.reduce((t,x)=>t+ic(x),0);
+function dInfo(k){   // lot = ingrédients + tourage ; poids final = détrempe obtenue + tourage
+ const d=S.doughs[k];if(!d)return null;
+ const tr=d.tour||[],lot=sum(d.items)+sum(tr),det=+d.yield||0;
+ const tk=tr.reduce((t,x)=>{const a=m(x.m);return t+(a&&a.unit!=='pièce'?(+x.q||0)/1000:0)},0),kg=det>0?det+tk:0;
+ const ch=Math.min(99,Math.max(0,+d.chutes||0)),chKg=kg*ch/100,usable=kg-chKg,net=lot-chKg*(+d.recup||0);
+ return{lot,kg,det,tk,usable,perKg:usable>0?net/usable:0};}
+function calc(r){
+ const d=S.doughs[r.dough],di=r.dough?dInfo(r.dough):null,by=s=>sum(r.items.filter(x=>x.s===s));
+ let gp=+r.dg||0;if(!(gp>0)&&+r.np>0&&di&&di.usable>0)gp=di.usable*1000/r.np;
+ const pate=(di&&gp>0?di.perKg*gp/1000:0)+by('pate'),g=by('garniture'),gl=by('glacage'),f=by('finition');
+ const mp=pate+g+gl+f,e=v=>v===''||v==null,lp=e(r.loss)?(+S.params.loss||0):(+r.loss||0);
+ const loss=mp*lp/100,wl=mp+loss,pack=e(r.pack)?(+S.params.pack||0):(+r.pack||0);
+ const empty=!!r.dough&&(!di||di.lot===0),nokg=!!di&&di.lot>0&&!(di.kg>0),nogp=!!di&&di.lot>0&&!(gp>0);
+ return{pate,g,gl,f,mp,loss,wl,pack,lp,gp,di,tot:wl+pack,empty,nokg,nogp,warnD:empty||nokg||nogp,inc:mp===0};}
+const pc=c=>c.inc?0:c.tot;   // un produit sans ingrédient n'est pas compté dans les totaux
+const F=n=>(+n||0).toLocaleString('fr-FR',{minimumFractionDigits:3,maximumFractionDigits:3})+' DT';
+const P=n=>(+n||0).toLocaleString('fr-FR',{maximumFractionDigits:1})+' %';
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+const sale=(r,c)=>{if(c.inc)return null;const t=+r.ttc,v=r.tva===''?NaN:+r.tva;if(!(t>0)||isNaN(v))return null;
+ const ht=t/(1+v/100);return{ht,fc:c.tot/ht*100,mg:ht-c.tot,mgp:(ht-c.tot)/ht*100};};
+
+/* ============ COMPOSANTS ============ */
+const opts=cur=>S.mats.map(a=>`<option value="${a.id}" ${a.id===cur?'selected':''}>${esc(a.name)}</option>`).join('')+(m(cur)?'':`<option value="${cur}" selected>(matière supprimée)</option>`);
+function itemsTable(path,list,sec,nobtn){
+ const rows=list.map((x,i)=>{const a=m(x.m),p=`${path}.${i}`;
+  return `<tr>${sec?`<td><select data-b="${p}.s">${SEC.map(s=>`<option value="${s[0]}" ${x.s===s[0]?'selected':''}>${s[1]}</option>`).join('')}</select></td>`:''}
+  <td><select data-b="${p}.m">${opts(x.m)}</select></td><td class="r">${a?F(a.price)+' / '+a.unit:'—'}</td>
+  <td class="r"><input type="number" step="any" min="0" data-t="n" data-b="${p}.q" value="${x.q}"> ${a?UN[a.unit][0]:''}</td>
+  <td class="r">${F(ic(x))}</td><td class="np"><button class="x" data-a="del" data-p="${path}" data-i="${i}" title="Supprimer">×</button></td></tr>`}).join('');
+ return `<div class="tw"><table><tr>${sec?'<th>Section</th>':''}<th>Ingrédient</th><th class="r">Prix unitaire</th><th class="r">Quantité utilisée</th><th class="r">Coût</th><th class="np"></th></tr>${rows}</table></div>
+ ${nobtn?'':`<p class="np"><button data-a="add" data-p="${path}" data-s="${sec?1:0}">+ Ingrédient</button></p>`}`;}
+const dline=(a,b)=>`<tr><td>${a}</td><td class="r">${b}</td></tr>`;
+
+/* ============ ÉCRANS ============ */
+function vDash(){
+ const cs=S.recipes.map(calc),ix=S.recipes.map((r,i)=>i),okI=ix.filter(i=>!cs[i].inc),bad=ix.filter(i=>cs[i].inc);
+ const mx=Math.max(...okI.map(i=>cs[i].tot),0.001),rl=okI.filter(i=>S.recipes[i].cat==='Rolls');
+ const avg=rl.length?rl.reduce((t,i)=>t+cs[i].tot,0)/rl.length:null;
+ const q=S.recipes.reduce((t,r)=>t+(+r.qty||0),0),day=S.recipes.reduce((t,r,i)=>t+(+r.qty||0)*pc(cs[i]),0);
+ const fcs=S.recipes.map((r,i)=>sale(r,cs[i])).filter(Boolean),fc=fcs.length?fcs.reduce((t,s)=>t+s.fc,0)/fcs.length:null;
+ const order=okI.slice().sort((a,b)=>cs[a].tot-cs[b].tot);
+ return `<div class="card"><h2>Paramètres de production</h2><div class="row">
+ <label>Pertes globales (%) <input type="number" step="any" min="0" data-t="n" data-b="params.loss" value="${S.params.loss}"></label>
+ <label>Emballage global par pièce (DT) <input type="number" step="any" min="0" data-t="n" data-b="params.pack" value="${S.params.pack}"></label>
+ <label>Pièces à produire (lot) <input type="number" step="1" min="0" data-t="n" data-b="params.qty" value="${S.params.qty}"></label></div>
+ <small>Valeurs initiales : 1 pièce, 5 % de pertes, 0,500 DT d’emballage. Chaque produit peut avoir ses propres pertes et son propre emballage dans sa fiche. Seuls les coûts matières sont calculés.</small></div>
+ <div class="grid">
+ <div class="card kpi"><span>Coût moyen d’un New York Roll</span><b>${avg===null?'—':F(avg)}</b><small>moyenne des recettes de la catégorie Rolls</small></div>
+ <div class="card kpi"><span>Coût de production journalière</span><b>${q?F(day):'—'}</b><small>${q?q+' pièces réparties':'répartition à saisir dans Production'}</small></div>
+ <div class="card kpi"><span>Coût mensuel estimé (${S.params.days} j)</span><b>${q?F(day*S.params.days):'—'}</b></div>
+ <div class="card kpi"><span>Food cost moyen</span><b>${fc===null?'—':P(fc)}</b><small>${fc===null?'prix de vente et TVA non renseignés':'sur '+fcs.length+' produit(s) renseigné(s)'}</small></div></div>
+ <div class="card"><h2>Classement des produits (du moins au plus coûteux)</h2>
+ ${order.length?'':'<p><small>Aucun produit avec des ingrédients.</small></p>'}
+ ${order.map((i,k)=>{const c=cs[i],w=v=>(v/mx*100).toFixed(1)+'%';
+  return `<div style="margin-bottom:10px"><div class="row" style="margin:0;justify-content:space-between"><span>${k+1}. ${esc(S.recipes[i].ref)} — ${esc(S.recipes[i].name)} <small>(${esc(S.recipes[i].cat)})</small>${c.warnD?' <small>pâte incomplète</small>':''}</span><b>${F(c.tot)}</b></div>
+  <div class="bar"><i style="width:${w(c.mp)};background:#3b2417"></i><i style="width:${w(c.loss)};background:#b9803f"></i><i style="width:${w(c.pack)};background:#e0c9a6"></i></div></div>`}).join('')}
+ <small>Barres : matières (brun), pertes (caramel), emballage (beige).</small>
+ ${bad.length?`<div class="warn">Fiche technique à compléter : ${bad.map(i=>esc(S.recipes[i].name)).join(', ')}.</div>`:''}</div>`;}
+
+function vRec(){
+ const add='<button data-a="addprod">+ Nouveau produit</button>';
+ if(!S.recipes.length)return `<div class="card"><p>Aucun produit. Créez-en un pour commencer.</p>${add}</div>`;
+ const r=S.recipes[UI.rec],c=calc(r),p='recipes.'+UI.rec,d=S.doughs[r.dough],cats=[...new Set(S.recipes.map(x=>x.cat))];
+ return `<div class="row np">${S.recipes.map((x,i)=>`<button class="${i===UI.rec?'on':''}" data-a="rec" data-i="${i}">${esc(x.ref)}</button>`).join('')}${add}</div>
+ <div class="card"><h2>${esc(r.ref)} — ${esc(r.name)}</h2>
+ <div class="row"><label>Référence <input size="8" data-b="${p}.ref" value="${esc(r.ref)}"></label><label>Nom <input data-b="${p}.name" value="${esc(r.name)}"></label>
+ <label>Catégorie <input list="cats" data-b="${p}.cat" value="${esc(r.cat)}"></label><datalist id="cats">${cats.map(x=>`<option value="${esc(x)}">`).join('')}</datalist>
+ <label>Pâte <select data-b="${p}.dough"><option value="">Aucune pâte</option>${Object.keys(S.doughs).map(k=>`<option value="${k}" ${k===r.dough?'selected':''}>${esc(S.doughs[k].name)}</option>`).join('')}</select></label></div>
+ <div class="row"><label>Pertes (%) <input type="number" step="any" min="0" data-t="n" data-b="${p}.loss" value="${r.loss}" placeholder="${S.params.loss}"></label>
+ <label>Emballage (DT) <input type="number" step="any" min="0" data-t="n" data-b="${p}.pack" value="${r.pack}" placeholder="${S.params.pack}"></label><small>Vide = valeur globale du tableau de bord.</small></div>
+ ${c.inc?'<div class="warn">Fiche technique non définie : ce produit n’est pas compté dans le classement ni dans les totaux tant qu’aucun ingrédient n’est saisi.</div>':''}
+ ${c.empty?`<div class="warn">La composition de la pâte « ${d?esc(d.name):'?'} » n’est pas renseignée : le coût est sous-estimé. À compléter dans l’onglet Pâtes.</div>`:''}
+ ${c.nokg?'<div class="warn">Le poids de pâte obtenu n’est pas renseigné (onglet Pâtes) : la pâte n’est pas comptée dans le coût.</div>':''}
+ ${c.nogp?'<div class="warn">Saisissez le poids de pâte par pièce, ou le nombre de pièces tirées du lot : la pâte n’est pas comptée dans le coût.</div>':''}
+ ${d?`<div class="row"><label>Poids de pâte par pièce (g) <input type="number" step="any" min="0" data-t="n" data-b="${p}.dg" value="${r.dg}"></label>
+ <label>ou pièces tirées du lot <input type="number" step="1" min="0" data-t="n" data-b="${p}.np" value="${r.np}"></label></div>
+ <p><small>Pâte « ${esc(d.name)} » : ${F(c.di.perKg)} le kg${c.gp>0?', '+c.gp.toLocaleString('fr-FR',{maximumFractionDigits:1})+' g par pièce'+(c.di.usable>0?', soit '+Math.floor(c.di.usable*1000/c.gp)+' pièces par lot':''):''}. Le poids par pièce prime sur le nombre de pièces. Les lignes ci-dessous s’ajoutent à la pâte.</small></p>`:''}
+ ${itemsTable(p+'.items',r.items,true)}
+ <div class="tw"><table>${dline('Coût de la pâte',F(c.pate))}${dline('Coût de la garniture',F(c.g))}${dline('Coût du glaçage / nappage',F(c.gl))}${dline('Coût de la finition',F(c.f))}
+ ${dline('<b>Coût total des matières premières</b>','<b>'+F(c.mp)+'</b>')}${dline('Pertes ('+P(c.lp)+')',F(c.loss))}${dline('Emballage',F(c.pack))}
+ ${dline('<b>Coût total de revient matière par pièce</b>','<b>'+F(c.tot)+'</b>')}${dline('Lot de '+(+S.params.qty||0)+' pièce(s)',F(c.tot*(+S.params.qty||0)))}</table></div>
+ <p class="np"><button data-a="print" data-t="rec">Imprimer la fiche</button> <button class="x" data-a="delprod">Supprimer ce produit</button></p></div>`;}
+
+function vPate(){
+ return `<div class="card"><p>Une pâte se prépare <b>par lot</b> : saisissez les quantités réelles (par exemple 11 kg de farine) et le <b>poids de pâte obtenu</b>. Pour une pâte feuilletée, ajoutez le <b>tourage</b> (beurre incorporé au laminoir) dans la même fiche : le poids final est celui de la détrempe plus le tourage. Dans chaque produit, indiquez le poids de pâte par pièce, ou le nombre de pièces tirées du lot.</p>
+ <p><small>Classic Butter : proportions provisoires converties en lot de 200 pièces ; poids obtenu estimé (œufs non comptés), à remplacer par votre mesure. Cocoa et Signature sont vides : à compléter par vos soins.</small></p>
+ <p class="np"><button data-a="adddough">+ Nouvelle pâte</button></p></div>`+
+ Object.keys(S.doughs).map(k=>{const d=S.doughs[k],di=dInfo(k),tr=d.tour||[],has=tr.length>0;
+  return `<div class="card"><h2><input data-b="doughs.${k}.name" value="${esc(d.name)}"> — coût du lot ${F(di.lot)}</h2>
+  ${d.prov?'<div class="warn">Valeurs provisoires : à valider après essais.</div>':''}
+  ${di.lot?'':'<div class="warn">Composition à compléter — non validée.</div>'}
+  ${has&&!(di.det>0)?'<div class="warn">Renseignez le poids de la détrempe obtenu (avant tourage) pour calculer le coût au kg.</div>':''}
+  <div class="row"><label>${has?'Poids de la détrempe obtenu (kg)':'Poids de pâte obtenu (kg)'} <input type="number" step="any" min="0" data-t="n" data-b="doughs.${k}.yield" value="${d.yield}"></label>
+  ${has&&di.kg>0?`<span>Poids final avec tourage : <b>${di.kg.toLocaleString('fr-FR',{maximumFractionDigits:3})} kg</b></span>`:''}
+  <label>Chutes (%) <input type="number" step="any" min="0" data-t="n" data-b="doughs.${k}.chutes" value="${d.chutes}"></label>
+  <label>Valeur des chutes (DT/kg) <input type="number" step="any" min="0" data-t="n" data-b="doughs.${k}.recup" value="${d.recup}"></label></div>
+  <p><small>Quantités du lot. Chutes et valeur des chutes : facultatives, vides au départ.</small></p>
+  ${itemsTable(`doughs.${k}.items`,d.items,false,true)}
+  ${has?`<p><b>Tourage</b> <small>(beurre incorporé au laminoir)</small></p>`+itemsTable(`doughs.${k}.tour`,tr,false,true):''}
+  <p class="np"><button data-a="add" data-p="doughs.${k}.items" data-s="0">+ Ingrédient</button> <button data-a="add" data-p="doughs.${k}.tour" data-s="0">+ Tourage</button></p>
+  <div class="tw"><table>${has?dline('dont tourage',F(sum(tr))):''}${has&&di.det>0?dline('Tourage en % du poids de la détrempe',P(di.tk/di.det*100)):''}
+  ${dline('Coût du lot',F(di.lot))}${dline('Poids utilisable (après chutes)',di.usable.toLocaleString('fr-FR',{maximumFractionDigits:3})+' kg')}${dline('<b>Coût par kg de pâte</b>','<b>'+F(di.perKg)+'</b>')}</table></div>
+  <p class="np"><button class="x" data-a="deldough" data-k="${k}">Supprimer cette pâte</button></p></div>`}).join('');}
+
+function vMp(){
+ return `<div class="card"><h2>Matières premières</h2><p><small>Prix en dinars tunisiens : valeurs de simulation, pas des prix fournisseurs confirmés. Toute modification met à jour toutes les recettes.</small></p>
+ <div class="tw"><table><tr><th>Matière</th><th>Unité d’achat</th><th class="r">Prix d’achat (DT)</th><th>Mise à jour</th><th>Fournisseur</th><th class="np"></th></tr>
+ ${S.mats.map((a,i)=>`<tr><td><input data-b="mats.${i}.name" value="${esc(a.name)}"></td>
+ <td><select data-b="mats.${i}.unit">${Object.keys(UN).map(u=>`<option ${u===a.unit?'selected':''}>${u}</option>`).join('')}</select></td>
+ <td class="r"><input type="number" step="any" min="0" data-t="n" data-b="mats.${i}.price" value="${a.price}"></td><td>${esc(a.date||'')}</td>
+ <td><input data-b="mats.${i}.sup" value="${esc(a.sup||'')}" placeholder="facultatif"></td>
+ <td class="np"><button class="x" data-a="delmat" data-i="${i}" title="Supprimer">×</button></td></tr>`).join('')}</table></div>
+ <p class="np"><button data-a="addmat">+ Ajouter une matière</button> <button data-a="resetmp">Réinitialiser les matières</button></p></div>`;}
+
+function vCmp(){
+ const cs=S.recipes.map(calc),t=cs.filter(c=>!c.inc).map(c=>c.tot),mx=Math.max(...t),mn=Math.min(...t);
+ const cl=c=>c.inc||mx===mn?'':c.tot===mx?'max':c.tot===mn?'min':'';
+ return `<div class="card"><h2>Comparatif des produits</h2><div class="tw"><table><tr><th>Réf.</th><th>Nom</th><th>Catégorie</th><th class="r">Coût matière</th><th class="r">Coût avec pertes</th><th class="r">Emballage</th><th class="r">Coût total</th></tr>
+ ${S.recipes.map((r,i)=>{const c=cs[i];return `<tr class="${cl(c)}"><td>${esc(r.ref)}</td><td>${esc(r.name)}${c.warnD?' *':''}</td><td>${esc(r.cat)}</td>${c.inc?'<td class="r" colspan="4"><small>fiche technique à compléter</small></td>':`<td class="r">${F(c.mp)}</td><td class="r">${F(c.wl)}</td><td class="r">${F(c.pack)}</td><td class="r"><b>${F(c.tot)}</b></td>`}</tr>`}).join('')}</table></div>
+ <small>Rouge : le plus coûteux. Vert : le moins coûteux (toutes catégories confondues). ${cs.some(c=>c.warnD)?'* pâte incomplète (composition, poids obtenu ou poids par pièce), coût sous-estimé.':''}</small>
+ <p class="np"><button data-a="print" data-t="cmp">Imprimer le tableau</button> <button data-a="csv">Exporter en CSV</button></p></div>
+ <div class="card"><h2>Simulation commerciale (facultative)</h2>
+ ${S.params.ht?'':'<div class="warn">Les prix d’achat ne sont pas confirmés hors taxes : le coût matière n’est pas HT, les marges sont provisoires.</div>'}
+ <label class="np"><input type="checkbox" data-b="params.ht" ${S.params.ht?'checked':''}> Les prix d’achat saisis sont HT</label>
+ <p><small>Le taux de TVA est propre à chaque produit : à valider avec le comptable. Coût matière utilisé : coût total de revient matière (pertes et emballage inclus).</small></p>
+ <div class="tw"><table><tr><th>Produit</th><th class="r">Prix TTC (DT)</th><th class="r">TVA (%)</th><th class="r">Prix HT</th><th class="r">Coût matière</th><th class="r">Food cost</th><th class="r">Marge (DT)</th><th class="r">Marge (%)</th></tr>
+ ${S.recipes.map((r,i)=>{const s=sale(r,cs[i]);return `<tr><td>${esc(r.ref)}</td><td class="r"><input type="number" step="any" min="0" data-t="n" data-b="recipes.${i}.ttc" value="${r.ttc}"></td>
+ <td class="r"><input type="number" step="any" min="0" data-t="n" data-b="recipes.${i}.tva" value="${r.tva}"></td>
+ ${s?`<td class="r">${F(s.ht)}</td><td class="r">${F(cs[i].tot)}</td><td class="r">${P(s.fc)}</td><td class="r">${F(s.mg)}</td><td class="r">${P(s.mgp)}</td>`:`<td class="r" colspan="5"><small>${cs[i].inc?'fiche technique à compléter':'prix TTC et TVA à renseigner'}</small></td>`}</tr>`}).join('')}</table></div></div>`;}
+
+function vProd(){
+ const cs=S.recipes.map(calc),cats=[...new Set(S.recipes.map(r=>r.cat))];let all=0;
+ const blocks=cats.map(cat=>{
+  const ix=S.recipes.map((r,i)=>i).filter(i=>S.recipes[i].cat===cat),tg=S.targets[cat];
+  const q=ix.reduce((t,i)=>t+(+S.recipes[i].qty||0),0),day=ix.reduce((t,i)=>t+(+S.recipes[i].qty||0)*pc(cs[i]),0);
+  const left=(tg===''||tg==null)?0:tg-q;all+=day;
+  return `<div class="card"><h2>${esc(cat)}</h2>
+  <div class="row"><label>Objectif par jour <input type="number" step="1" min="0" data-t="n" data-b="targets.${esc(cat)}" value="${tg==null?'':tg}"></label></div>
+  <div class="tw"><table><tr><th>Produit</th><th class="r">Quantité / jour</th><th class="r">Coût unitaire</th><th class="r">Coût / jour</th></tr>
+  ${ix.map(i=>{const r=S.recipes[i];return `<tr><td>${esc(r.ref)} — ${esc(r.name)}</td><td class="r"><input type="number" step="1" min="0" data-t="n" data-b="recipes.${i}.qty" value="${r.qty}"></td>${cs[i].inc?'<td class="r" colspan="2"><small>fiche technique à compléter</small></td>':`<td class="r">${F(cs[i].tot)}</td><td class="r">${F((+r.qty||0)*cs[i].tot)}</td>`}</tr>`}).join('')}
+  <tr><td><b>Sous-total</b></td><td class="r"><b>${q}</b></td><td></td><td class="r"><b>${F(day)}</b></td></tr></table></div>
+  ${left>0?`<div class="warn">Reste à répartir : ${left} pièce(s).</div>`:left<0?`<div class="warn">Dépassement de l’objectif de ${-left} pièce(s).</div>`:''}</div>`}).join('');
+ return `<div class="card"><h2>Production quotidienne</h2><div class="row"><label>Jours par mois <input type="number" min="0" data-t="n" data-b="params.days" value="${S.params.days}"></label></div>
+ <p>Coût journalier total : <b>${F(all)}</b> — coût mensuel (${S.params.days} jours) : <b>${F(all*S.params.days)}</b></p>
+ <small>Les produits sans fiche technique (comme les mini rolls au départ) ne sont pas comptés. La répartition est libre dans chaque catégorie.</small></div>`+blocks;}
+
+function vSave(){
+ return `<div class="card"><h2>Sauvegarde et exports</h2>
+ ${storeOK?'<p><small>Les modifications sont conservées automatiquement dans ce navigateur (localStorage).</small></p>':'<div class="warn">Stockage local indisponible : exportez régulièrement une sauvegarde JSON.</div>'}
+ <div class="row"><button data-a="csv">Exporter en CSV (Excel)</button><button data-a="json">Exporter la sauvegarde JSON</button><button data-a="imp">Importer une sauvegarde JSON</button><button class="x" data-a="resetall">Tout réinitialiser</button></div></div>`;}
+
+/* ============ AFFICHAGE ============ */
+const V={dash:vDash,rec:vRec,pate:vPate,mp:vMp,cmp:vCmp,prod:vProd,save:vSave};
+function draw(){const y=scrollY;
+ if(UI.rec>=S.recipes.length)UI.rec=Math.max(0,S.recipes.length-1);
+ document.getElementById('nav').innerHTML=TABS.map(t=>`<button class="${t[0]===UI.tab?'on':''}" data-a="tab" data-t="${t[0]}">${t[1]}</button>`).join('');
+ document.getElementById('main').innerHTML=V[UI.tab]();scrollTo(0,y);}
+
+/* ============ ACTIONS ============ */
+const getP=p=>p.split('.').reduce((o,k)=>o[k],S);
+function setP(p,v){const k=p.split('.'),last=k.pop();k.reduce((o,x)=>o[x],S)[last]=v;}
+function dl(name,txt,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([txt],{type}));a.download=name;document.body.appendChild(a);a.click();a.remove();}
+function csv(){
+ const q=v=>'"'+String(v).replace(/"/g,'""')+'"',n=v=>(+v||0).toFixed(3).replace('.',','),L=[];
+ L.push(['Référence','Nom','Catégorie','Coût matière','Coût avec pertes','Emballage','Coût total'].map(q).join(';'));
+ S.recipes.forEach(r=>{const c=calc(r);L.push([r.ref,r.name,r.cat,n(c.mp),n(c.wl),n(c.pack),n(c.tot)].map(q).join(';'))});
+ S.recipes.forEach(r=>{L.push('',q(r.ref+' — '+r.name));L.push(['Section','Ingrédient','Prix unitaire','Quantité','Coût'].map(q).join(';'));
+  const c0=calc(r),d=S.doughs[r.dough];if(d)L.push(['pate','Pâte '+d.name,n(c0.di.perKg)+' /kg',n(c0.gp)+' g',n(c0.di.perKg*c0.gp/1000)].map(q).join(';'));r.items.forEach(x=>{const a=m(x.m);
+   L.push([x.s,a?a.name:'?',n(a?a.price:0)+(a?' /'+a.unit:''),n(x.q)+(a?' '+UN[a.unit][0]:''),n(ic(x))].map(q).join(';'))})});
+ dl('LAdoree_food_cost.csv','\ufeff'+L.join('\r\n'),'text/csv;charset=utf-8');}
+const used=id=>S.recipes.some(r=>r.items.some(x=>x.m===id))||Object.values(S.doughs).some(d=>d.items.some(x=>x.m===id));
+
+document.addEventListener('change',e=>{const t=e.target,p=t.dataset.b;if(!p)return;
+ let v=t.type==='checkbox'?t.checked:t.dataset.t==='n'?(t.value===''||isNaN(t.value)?'':Math.max(0,+t.value)):t.value;
+ if(/\.cat$/.test(p))v=String(v).replace(/\./g,' ').trim()||'Autre';   // pas de point dans une catégorie
+ setP(p,v);if(/^mats\.\d+\.(price|unit)$/.test(p))S.mats[+p.split('.')[1]].date=today();   // date de mise à jour
+ save();draw();});
+
+document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(!b)return;const d=b.dataset,a=d.a;
+ if(a==='tab'){UI.tab=d.t;draw();scrollTo(0,0);return}
+ if(a==='rec'){UI.rec=+d.i;draw();return}
+ if(a==='print'){UI.tab=d.t;draw();window.print();return}
+ if(a==='add'){getP(d.p).push({m:(function(){const b=/\.tour$/.test(d.p)?S.mats.find(x=>x.name==='Beurre'):null,f=b||S.mats[0];return f?f.id:''})(),q:0,s:d.s==='1'?'garniture':undefined})}
+ else if(a==='del'){getP(d.p).splice(+d.i,1)}
+ else if(a==='addprod'){let k=1,ref;while(S.recipes.some(r=>r.ref===(ref='P'+String(k).padStart(2,'0'))))k++;
+  S.recipes.push(R(ref,'Nouveau produit','',[],'Autre'));UI.rec=S.recipes.length-1;UI.tab='rec'}
+ else if(a==='delprod'){const r=S.recipes[UI.rec];if(!confirm('Supprimer le produit « '+r.name+' » et sa fiche ?'))return;S.recipes.splice(UI.rec,1);UI.rec=Math.max(0,UI.rec-1)}
+ else if(a==='adddough'){S.doughs['d'+Date.now()]=D('Nouvelle pâte',[])}
+ else if(a==='deldough'){if(!confirm('Supprimer la pâte « '+S.doughs[d.k].name+' » ? Les produits qui l’utilisent n’auront plus de pâte.'))return;
+  delete S.doughs[d.k];S.recipes.forEach(r=>{if(r.dough===d.k)r.dough=''})}
+ else if(a==='addmat'){S.mats.push({id:'x'+Date.now(),name:'Nouvelle matière',unit:'kg',price:0,date:today(),sup:''})}
+ else if(a==='delmat'){const x=S.mats[+d.i];if(!confirm('Supprimer « '+x.name+' » ?'+(used(x.id)?'\nElle est utilisée dans des recettes : ces lignes compteront pour 0 DT.':'')))return;S.mats.splice(+d.i,1)}
+ else if(a==='resetmp'){if(!confirm('Rétablir les 23 matières et prix initiaux ? Les matières ajoutées seront supprimées.'))return;S.mats=mats0()}
+ else if(a==='resetall'){if(!confirm('Tout réinitialiser (matières, recettes, paramètres) ? Cette action est définitive.'))return;S=init()}
+ else if(a==='csv'){csv();return}
+ else if(a==='json'){dl('LAdoree_sauvegarde_'+today()+'.json',JSON.stringify(S,null,1),'application/json');return}
+ else if(a==='imp'){document.getElementById('file').click();return}
+ save();draw();});
+
+document.getElementById('file').addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const rd=new FileReader();
+ rd.onload=()=>{try{const o=JSON.parse(rd.result);if(!valid(o))throw 0;if(!confirm('Remplacer les données actuelles par cette sauvegarde ?'))return;
+  S=migrate(o);UI.rec=0;save();draw();}catch(x){alert('Fichier invalide : sauvegarde non importée.')}};
+ rd.readAsText(f);e.target.value='';});
+
+load();draw();
+</script>
+</body>
+</html>
